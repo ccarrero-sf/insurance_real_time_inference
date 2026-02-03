@@ -1,0 +1,12 @@
+definition_version: 2
+entities:
+  car_insurance_sis:
+    type: streamlit
+    identifier:
+      name: CAR_INSURANCE_SIS
+      database: CC_ML_INSURANCE
+      schema: CAR_PRICING
+    title: "Car Insurance Premium Calculator"
+    main_file: car_insurance_sis.py
+    query_warehouse: COMPUTE_WH
+    stage: CC_ML_INSURANCE.CAR_PRICING.STREAMLIT_STAGE

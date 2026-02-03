@@ -1,0 +1,25 @@
+spec:
+  containers:
+  - name: insurance-backend
+    image: /cc_ml_insurance/car_pricing/images/insurance-backend:latest
+    env:
+      SNOWFLAKE_WAREHOUSE: COMPUTE_WH
+    resources:
+      requests:
+        memory: 1Gi
+        cpu: 500m
+      limits:
+        memory: 2Gi
+        cpu: 1000m
+    readinessProbe:
+      port: 8080
+      path: /health
+    secrets:
+    - snowflakeSecret: CC_ML_INSURANCE.CAR_PRICING.PAT_TOKEN_SECRET
+      envVarName: PAT_TOKEN
+    - snowflakeSecret: CC_ML_INSURANCE.CAR_PRICING.GATEWAY_URL_SECRET
+      envVarName: GATEWAY_URL
+  endpoints:
+  - name: api
+    port: 8080
+    public: true
