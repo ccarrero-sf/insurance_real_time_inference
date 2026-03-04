@@ -8,17 +8,51 @@ A complete end-to-end ML pipeline for predicting car insurance premiums using:
 
 ## Architecture
 
+The project has three main paths: real-time inference, batch inference, and an automated pipeline.
+
 ```
-┌─────────────────────┐     ┌─────────────────────────┐     ┌──────────────────────┐
-│  Frontend App       │────▶│  Backend SPCS Service   │────▶│  Model Inference     │
-│  (Streamlit)        │     │  (FastAPI)              │     │  (SPCS Service)      │
-└─────────────────────┘     └───────────┬─────────────┘     └──────────────────────┘
-                                        │
-                                        ▼
-                            ┌─────────────────────────┐
-                            │  Online Feature Store   │
-                            │  (Customer Risk Data)   │
-                            └─────────────────────────┘
+┌──────────── REAL-TIME INFERENCE ─────────────┐
+│                                               │
+│  Streamlit Frontend                           │
+│       │ POST /predict                         │
+│       ▼                                       │
+│  FastAPI Backend (SPCS)                       │
+│    ├─ Online Feature Store lookup             │
+│    └─ Model Inference (SPCS Service)          │
+│                                               │
+│  Gateway (stable URL routing)                 │
+│                                               │
+│  Perf Test App (concurrent load testing)      │
+└───────────────────────────────────────────────┘
+
+┌──────────── BATCH INFERENCE ─────────────────┐
+│                                               │
+│  Batch Inference Notebook                     │
+│    ├─ Generate synthetic test data (200 rows) │
+│    ├─ mv.run() via SPCS inference service     │
+│    ├─ Query Inference Table (telemetry)       │
+│    └─ Stream + Task transform pipeline        │
+│       (polls every 5 min)                     │
+└───────────────────────────────────────────────┘
+
+┌──────────── AUTOMATED PIPELINE (DAG) ────────┐
+│                                               │
+│  INGEST_DATA (ML Job on compute pool)         │
+│       │                                       │
+│  TRAIN_MODEL (Feature Store + XGBoost)        │
+│       │                                       │
+│  CHECK_QUALITY (branch)                       │
+│       ├─── pass ──▶ PROMOTE_MODEL             │
+│       │                  │                    │
+│       │             RUN_INFERENCE              │
+│       │                                       │
+│       └─── fail ──▶ SEND_ALERT                │
+│                                               │
+│  CLEANUP (finalizer - always runs)            │
+│                                               │
+│  Schedule: daily 6am UTC                      │
+│  Two variants: task_graph / task_graph_stage  │
+└───────────────────────────────────────────────┘
 ```
 
 ## Prerequisites
@@ -117,22 +151,49 @@ You should see: `Connection test successful!`
 ## Project Structure
 
 ```
-insurance_real_time/
-├── car_insurance_ml.ipynb          # Main notebook - sets up everything
-├── car_insurance_frontend.py       # Frontend Streamlit app
-├── car_insurance_realtime_perf_test.py  # Performance testing app
-├── requirements.txt                # Python dependencies (local)
-├── environment.yml                 # Conda environment
-├── snowflake.yml                   # Snowflake project config
+insurance_real_time_inference/
+├── car_insurance_ml.ipynb                # Main notebook - sets up everything
+├── car_insurance_batch_inference.ipynb    # Batch inference & transform pipeline
+├── car_insurance_frontend.py             # Frontend Streamlit app
+├── car_insurance_realtime_perf_test.py   # Performance testing app
+├── requirements.txt                      # Python dependencies (local)
+├── environment.yml                       # Conda environment
+├── snowflake.yml                         # Snowflake project config
 ├── backend/
-│   ├── app.py                      # FastAPI backend service
-│   ├── Dockerfile                  # Docker build file
-│   ├── requirements.txt            # Backend dependencies
-│   ├── deploy.sh                   # Deployment script
-│   └── service-spec.yaml           # SPCS service spec
+│   ├── app.py                            # FastAPI backend service
+│   ├── Dockerfile                        # Docker build file
+│   ├── requirements.txt                  # Backend dependencies
+│   ├── deploy.sh                         # Deployment script
+│   └── service-spec.yaml                 # SPCS service spec
+├── task_graph/                           # Automated DAG (direct serialization)
+│   ├── requirements.txt
+│   ├── scripts/
+│   │   ├── setup_infrastructure.sql      # DB, schemas, stages, grants
+│   │   ├── run_setup.py                  # Python runner for SQL setup
+│   │   └── upload_code.py                # Uploads src/ to @CODE_STAGE
+│   └── src/
+│       ├── constants.py                  # Config (DB, schemas, thresholds)
+│       ├── data_ops.py                   # Synthetic data generation + ML Job ingestion
+│       ├── feature_ops.py                # Feature Store setup + datasets
+│       ├── modeling.py                   # XGBoost training, registry, inference
+│       ├── pipeline_tasks.py             # 7 DAG task entry points
+│       └── deploy_dag.py                 # DAG deployment (daily 6am UTC)
+├── task_graph_stage/                     # Automated DAG (stage-loader variant)
+│   ├── requirements.txt
+│   ├── scripts/
+│   │   ├── setup_infrastructure.sql
+│   │   ├── run_setup.py
+│   │   └── upload_code.py
+│   └── src/
+│       ├── constants.py
+│       ├── data_ops.py
+│       ├── feature_ops.py
+│       ├── modeling.py
+│       ├── pipeline_tasks.py
+│       └── deploy_dag.py
 └── .streamlit/
-    ├── secrets.toml                # Local secrets (PAT token)
-    └── secrets.toml.example        # Template for secrets
+    ├── secrets.toml                      # Local secrets (PAT token)
+    └── secrets.toml.example              # Template for secrets
 ```
 
 ## Step 1: Set Up Local Environment
@@ -306,6 +367,111 @@ Open http://localhost:8501 in your browser.
 - **Component Breakdown**: Feature Store vs Model Inference time
 - **Inference Telemetry**: Data from INFERENCE_TABLE
 
+## Step 7: Batch Inference & Transform Pipeline
+
+The batch inference notebook (`car_insurance_batch_inference.ipynb`) demonstrates:
+- Generating synthetic test data (200 rows)
+- Running batch predictions via `mv.run()` on the SPCS inference service
+- Querying the Inference Table for logged predictions and telemetry
+- Creating a stream + task pipeline that monitors new inference records and runs `transform` every 5 minutes
+
+```bash
+# Set connection
+export SNOWFLAKE_CONNECTION_NAME=talent_keypair
+
+# Open and run the notebook
+jupyter notebook car_insurance_batch_inference.ipynb
+```
+
+**Execute all cells in order.** The notebook will:
+
+1. **Generate Data**: Create 200 synthetic test records and upload to `TEST_BATCH_DATA`
+2. **Batch Predict**: Call `mv.run(function_name="predict", service_name="CAR_INSURANCE_INFERENCE_SVC")` on the test data
+3. **Query Inference Table**: Inspect logged predictions via `INFERENCE_TABLE()` (timestamps, query IDs, inputs, outputs)
+4. **Transform Pipeline**: Create a stream on the inference table and a scheduled task that runs `transform` on new records every 5 minutes
+
+## Step 8: Automated Pipeline (Task Graph)
+
+The project includes two variants of an automated ML pipeline deployed as a Snowflake Task Graph (DAG). Both implement the same workflow but differ in how task code is loaded at runtime.
+
+### DAG Structure
+
+```
+INGEST_DATA >> TRAIN_MODEL >> CHECK_QUALITY >> [PROMOTE_MODEL, SEND_ALERT]
+PROMOTE_MODEL >> RUN_INFERENCE
+CLEANUP (finalizer - always runs)
+```
+
+| Task | Description |
+|------|-------------|
+| `INGEST_DATA` | Generate synthetic customer + policy data via ML Job on compute pool |
+| `TRAIN_MODEL` | Set up Feature Store, prepare datasets, train XGBoost model, register in Model Registry |
+| `CHECK_QUALITY` | Branch: compare new model R2 against threshold; route to promote or alert |
+| `PROMOTE_MODEL` | Set new model version as production default |
+| `SEND_ALERT` | Log alert to `PIPELINE_ALERTS` table (model did not meet criteria) |
+| `RUN_INFERENCE` | Run batch predictions using the promoted model |
+| `CLEANUP` | Clean up old versions and temporary artifacts (always runs) |
+
+The pipeline uses a **separate database** (`CC_INSURANCE_PIPELINE`) from the interactive notebook's `CC_ML_INSURANCE`, keeping pipeline infrastructure isolated.
+
+### Variant A: `task_graph/` (Direct Serialization)
+
+Task functions are serialized directly at deploy time. To update task logic, you must redeploy the DAG.
+
+- Quality threshold: R2 >= 0.7
+- Schema: `CC_INSURANCE_PIPELINE.PIPELINE`
+
+```bash
+cd task_graph
+
+# 1. Set up infrastructure (run once)
+# Execute scripts/setup_infrastructure.sql in Snowflake to create DB, schemas, stages, and grants
+
+# 2. Upload source code to @CODE_STAGE
+cd src
+python deploy_dag.py          # Deploy DAG (suspended)
+python deploy_dag.py --execute  # Deploy and immediately execute
+```
+
+### Variant B: `task_graph_stage/` (Stage Loader)
+
+Each task uses a generic `stage_task_runner` that dynamically imports the target module from `@CODE_STAGE` at runtime. Updating `.py` files on the stage takes effect on the next DAG run **without redeploying** the DAG.
+
+- Quality threshold: R2 >= 0.5 (with 0.05 tolerance)
+- Schema: `CC_INSURANCE_PIPELINE.PIPELINE_STG`
+- Preprocessing: uses sklearn Pipeline with OrdinalEncoder
+
+```bash
+cd task_graph_stage
+
+# 1. Set up infrastructure (run once)
+# Execute scripts/setup_infrastructure.sql in Snowflake
+
+# 2. Upload source code to @CODE_STAGE
+python scripts/upload_code.py
+
+# 3. Deploy DAG
+cd src
+python deploy_dag.py          # Deploy DAG (suspended)
+python deploy_dag.py --execute  # Deploy and immediately execute
+```
+
+### Monitoring the Pipeline
+
+```sql
+-- Check task history
+SELECT * FROM TABLE(CC_INSURANCE_PIPELINE.INFORMATION_SCHEMA.TASK_HISTORY())
+ORDER BY SCHEDULED_TIME DESC;
+
+-- View pipeline alerts
+SELECT * FROM CC_INSURANCE_PIPELINE.PIPELINE.PIPELINE_ALERTS
+ORDER BY ALERT_TIME DESC;
+
+-- Resume/execute the DAG manually
+ALTER TASK CC_INSURANCE_PIPELINE.PIPELINE.CAR_INSURANCE_ML_PIPELINE RESUME;
+EXECUTE TASK CC_INSURANCE_PIPELINE.PIPELINE.CAR_INSURANCE_ML_PIPELINE;
+```
+
 ## Troubleshooting
 
 ### Notebook Issues
@@ -359,19 +525,28 @@ DROP SERVICE IF EXISTS CC_ML_INSURANCE.CAR_PRICING.CAR_INSURANCE_INFERENCE_SVC;
 -- Drop compute pools
 DROP COMPUTE POOL IF EXISTS BACKEND_CPU_POOL;
 
--- Drop database (removes all objects)
+-- Drop interactive database (removes all objects)
 DROP DATABASE IF EXISTS CC_ML_INSURANCE;
+
+-- Drop pipeline database (removes DAGs, stages, feature store, etc.)
+DROP DATABASE IF EXISTS CC_INSURANCE_PIPELINE;
 ```
 
 ## Key Snowflake Features Demonstrated
 
 - **Feature Store**: Entity, Feature View with online serving
 - **Online Feature Store**: Sub-second feature retrieval
-- **Model Registry**: Version management, metrics tracking
+- **Model Registry**: Version management, metrics tracking, production promotion
 - **SPCS**: Container services for backend and model inference
-- **Inference Table**: Model telemetry and monitoring
+- **Inference Table**: Auto-captured model telemetry and monitoring
+- **ML Jobs**: `@remote` decorator for training/inference on SPCS compute pools
+- **Task Graph (DAG)**: Automated pipeline with DAGTask, DAGTaskBranch, TaskContext, Cron scheduling
+- **Gateway**: Stable URL routing to SPCS service endpoints
+- **Streams & Tasks**: Change data capture pipeline for transform monitoring
 
 ## Configuration Reference
+
+### Interactive Setup (Notebook)
 
 | Parameter | Value |
 |-----------|-------|
@@ -381,5 +556,19 @@ DROP DATABASE IF EXISTS CC_ML_INSURANCE;
 | Model Name | `CAR_INSURANCE_PRICING_MODEL` |
 | Backend Service | `INSURANCE_BACKEND_SVC` |
 | Model Service | `CAR_INSURANCE_INFERENCE_SVC` |
+| Gateway | `CAR_INSURANCE_GATEWAY` |
 | Compute Pool | `BACKEND_CPU_POOL` |
 | Warehouse | `COMPUTE_WH` |
+
+### Automated Pipeline (Task Graph)
+
+| Parameter | `task_graph/` | `task_graph_stage/` |
+|-----------|---------------|---------------------|
+| Database | `CC_INSURANCE_PIPELINE` | `CC_INSURANCE_PIPELINE` |
+| Schema | `PIPELINE` | `PIPELINE_STG` |
+| Data Schema | `DATA` | `DATA` |
+| Compute Pool | `DEMO_POOL` | `DEMO_POOL` |
+| DAG Name | `CAR_INSURANCE_ML_PIPELINE` | `CAR_INSURANCE_ML_PIPELINE` |
+| Schedule | Daily 6am UTC | Daily 6am UTC |
+| Quality Threshold | R2 >= 0.7 | R2 >= 0.5 (± 0.05 tolerance) |
+| Code Loading | Direct serialization | Dynamic import from `@CODE_STAGE` |
