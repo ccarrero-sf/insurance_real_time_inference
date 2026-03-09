@@ -2,7 +2,7 @@
 Upload Pipeline Source Code to Snowflake Stage.
 
 This script uploads all Python source files from task_graph/src/ to
-@CC_INSURANCE_PIPELINE.PIPELINE_STG.CODE_STAGE so that Snowflake Tasks
+@CC_INSURANCE_PIPELINE.PIPELINE_MLJOBS.CODE_STAGE so that Snowflake Tasks
 can reference them via imports.
 
 Must be run BEFORE deploying the DAG (deploy_dag.py).
@@ -28,11 +28,16 @@ SOURCE_FILES = [
     "feature_ops.py",
     "modeling.py",
     "pipeline_tasks.py",
+    os.path.join("helpers", "__init__.py"),
+    os.path.join("helpers", "data_generation.py"),
+    os.path.join("helpers", "feature_engineering.py"),
+    os.path.join("helpers", "model_artifacts.py"),
+    os.path.join("helpers", "inference_input.py"),
 ]
 
 # Stage path (without @)
 STAGE_DB = "CC_INSURANCE_PIPELINE"
-STAGE_SCHEMA = "PIPELINE_STG"
+STAGE_SCHEMA = "PIPELINE_MLJOBS"
 STAGE_NAME = "CODE_STAGE"
 STAGE_PATH = f"@{STAGE_DB}.{STAGE_SCHEMA}.{STAGE_NAME}"
 
@@ -53,14 +58,18 @@ def upload_code(session: Session, verify: bool = False) -> None:
             print(f"  WARNING: {filename} not found at {filepath}, skipping")
             continue
 
+        # Place files in matching subdirectory on the stage
+        subdir = os.path.dirname(filename)
+        stage_target = f"{STAGE_PATH}/{subdir}" if subdir else STAGE_PATH
+
         result = session.file.put(
             local_file_name=filepath,
-            stage_location=STAGE_PATH,
+            stage_location=stage_target,
             auto_compress=False,
             overwrite=True,
         )
         status = result[0].status if result else "unknown"
-        print(f"  {filename} -> {STAGE_PATH}/{filename} [{status}]")
+        print(f"  {filename} -> {stage_target}/{os.path.basename(filename)} [{status}]")
         uploaded.append(filename)
 
     print(f"\nUploaded {len(uploaded)}/{len(SOURCE_FILES)} files")

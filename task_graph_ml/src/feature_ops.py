@@ -1,8 +1,11 @@
 """
-Feature Store Operations for Car Insurance ML Pipeline.
+Feature Store Operations for Car Insurance ML Pipeline (ML Jobs version).
 
 Sets up the Snowflake Feature Store with customer risk features,
 and prepares training datasets with train/test splits.
+
+This module runs on the warehouse (not compute pool) since Feature Store
+operations don't benefit from SPCS compute.
 """
 
 from datetime import datetime
