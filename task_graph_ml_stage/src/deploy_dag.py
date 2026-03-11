@@ -134,8 +134,6 @@ def sync_git_to_code_stage(session: Session) -> None:
     CODE_STAGE as a writable internal stage and sync files into it from Git.
     """
     print(f"Syncing source files from Git stage to CODE_STAGE...")
-    # Clear CODE_STAGE and copy fresh files from Git repo stage
-    session.sql(f"REMOVE {CODE_STAGE}").collect()
     session.sql(f"COPY FILES INTO {CODE_STAGE} FROM {GIT_SRC_PATH}").collect()
     print("Source files synced to CODE_STAGE.\n")
 

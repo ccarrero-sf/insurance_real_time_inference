@@ -50,7 +50,6 @@ def task_refresh_git(session: Session) -> str:
 
     # Sync source files from Git stage to writable CODE_STAGE
     print(f"Syncing files from Git stage to CODE_STAGE...")
-    session.sql(f"REMOVE {CODE_STAGE}").collect()
     session.sql(f"COPY FILES INTO {CODE_STAGE} FROM {GIT_SRC_PATH}").collect()
     print("CODE_STAGE synced with latest Git code.")
 
