@@ -27,15 +27,18 @@ from snowflake.snowpark import Session
 
 def task_refresh_git(session: Session) -> str:
     """
-    Refresh the Git Repository stage to pull the latest code.
+    Refresh the Git Repository stage and sync source files to CODE_STAGE.
 
-    Runs ALTER GIT REPOSITORY ... FETCH to ensure the pipeline uses the most
-    recent committed code from the remote Git repository.
+    Runs ALTER GIT REPOSITORY ... FETCH to pull the latest code from the remote
+    Git repository, then copies source files from the Git stage into the internal
+    CODE_STAGE so that downstream StoredProcedureCall tasks use the latest code.
 
     This is the first task in the DAG, so all subsequent tasks will use the
     latest code from the Git repository.
     """
-    from constants import PIPELINE_DB, PIPELINE_SCHEMA, GIT_REPO_NAME
+    from constants import (
+        PIPELINE_DB, PIPELINE_SCHEMA, GIT_REPO_NAME, GIT_SRC_PATH, CODE_STAGE,
+    )
 
     print("=== TASK: Refresh Git Repository ===")
 
@@ -43,8 +46,17 @@ def task_refresh_git(session: Session) -> str:
     print(f"Fetching latest from: {fqn_repo}")
 
     session.sql(f"ALTER GIT REPOSITORY {fqn_repo} FETCH").collect()
+    print("Git repository refreshed.")
 
-    print("Git repository refreshed successfully.")
+    # Refresh the stage metadata so Snowflake sees the latest files
+    session.sql(f"ALTER STAGE {CODE_STAGE.lstrip('@')} REFRESH").collect()
+    print("CODE_STAGE metadata refreshed.")
+
+    # Sync source files from Git stage to writable CODE_STAGE
+    print(f"Syncing files from Git stage to CODE_STAGE...")
+    session.sql(f"REMOVE {CODE_STAGE}").collect()
+    session.sql(f"COPY FILES INTO {CODE_STAGE} FROM {GIT_SRC_PATH}").collect()
+    print("CODE_STAGE synced with latest Git code.")
 
     return_value = json.dumps({
         "status": "refreshed",
