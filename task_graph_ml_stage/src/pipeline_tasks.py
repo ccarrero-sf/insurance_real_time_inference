@@ -48,10 +48,6 @@ def task_refresh_git(session: Session) -> str:
     session.sql(f"ALTER GIT REPOSITORY {fqn_repo} FETCH").collect()
     print("Git repository refreshed.")
 
-    # Refresh the stage metadata so Snowflake sees the latest files
-    session.sql(f"ALTER STAGE {CODE_STAGE.lstrip('@')} REFRESH").collect()
-    print("CODE_STAGE metadata refreshed.")
-
     # Sync source files from Git stage to writable CODE_STAGE
     print(f"Syncing files from Git stage to CODE_STAGE...")
     session.sql(f"REMOVE {CODE_STAGE}").collect()
