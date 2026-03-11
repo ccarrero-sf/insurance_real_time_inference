@@ -95,7 +95,7 @@ def main() -> None:
     }
     print(f"Training complete. Metrics: {metrics}")
 
-    print ("Testing this works well when I commit this change in the git repository")
+    print ("Testing this works well when I commit this change in the git repository SECOND TIME!!!!!!")
     
     # Generate version name
     version_name = f"v_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
