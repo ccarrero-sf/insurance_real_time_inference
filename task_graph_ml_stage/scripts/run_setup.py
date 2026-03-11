@@ -47,7 +47,8 @@ def run_setup(session: Session) -> None:
         f"CREATE SCHEMA IF NOT EXISTS {fqn_schema}",
         f"CREATE SCHEMA IF NOT EXISTS {DB_NAME}.DATA",
 
-        # Internal stages (payload/scratch and artifacts)
+        # Internal stages
+        f"CREATE STAGE IF NOT EXISTS {fqn_schema}.CODE_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')",
         f"CREATE STAGE IF NOT EXISTS {fqn_schema}.JOB_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')",
         f"CREATE STAGE IF NOT EXISTS {fqn_schema}.DAG_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')",
         f"CREATE STAGE IF NOT EXISTS {fqn_schema}.ARTIFACTS_STAGE ENCRYPTION = (TYPE = 'SNOWFLAKE_SSE')",
@@ -70,6 +71,7 @@ def run_setup(session: Session) -> None:
         f"GRANT ALL ON SCHEMA {DB_NAME}.DATA TO ROLE {ROLE_NAME}",
 
         # Grants - stages
+        f"GRANT READ, WRITE ON STAGE {fqn_schema}.CODE_STAGE TO ROLE {ROLE_NAME}",
         f"GRANT READ, WRITE ON STAGE {fqn_schema}.JOB_STAGE TO ROLE {ROLE_NAME}",
         f"GRANT READ, WRITE ON STAGE {fqn_schema}.DAG_STAGE TO ROLE {ROLE_NAME}",
         f"GRANT READ, WRITE ON STAGE {fqn_schema}.ARTIFACTS_STAGE TO ROLE {ROLE_NAME}",

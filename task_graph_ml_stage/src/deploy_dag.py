@@ -11,8 +11,10 @@ A REFRESH_GIT task runs first in the DAG to ensure the Git Repository stage
 has the latest committed code before any pipeline task executes.
 
 Lightweight tasks (prepare_data, check_quality, promote_model, send_alert,
-cleanup) use StoredProcedureCall on the warehouse, importing code from the
-Git Repository stage.
+cleanup) use StoredProcedureCall on the warehouse. Because sproc.register()
+needs PUT (write) access to its stage_location and Git repository stages are
+read-only, these SPs import from an internal CODE_STAGE. At deploy time, source
+files are copied from the Git stage into CODE_STAGE via COPY FILES.
 
 DAG structure:
 
@@ -52,6 +54,7 @@ from constants import (
     DATA_SCHEMA,
     CODE_STAGE,
     JOB_STAGE,
+    GIT_SRC_PATH,
     GIT_JOBS_PATH,
     GIT_REPO_NAME,
     WAREHOUSE,
@@ -77,18 +80,21 @@ DAG_NAME = "CAR_INSURANCE_ML_PIPELINE"
 DAG_SCHEDULE = Cron("0 9 * * *", "UTC")
 
 # Stage imports for StoredProcedureCall tasks (warehouse tasks only)
-# These now point to the Git Repository stage paths
+# These point to the internal writable CODE_STAGE (synced from Git at deploy time).
+# COPY FILES preserves the relative directory structure from the Git stage, so
+# files end up under CODE_STAGE/src/ (mirroring the repo layout).
+CODE_STAGE_SRC = f"{CODE_STAGE}/src"
 STAGE_IMPORTS = [
-    f"{CODE_STAGE}/constants.py",
-    f"{CODE_STAGE}/data_ops.py",
-    f"{CODE_STAGE}/feature_ops.py",
-    f"{CODE_STAGE}/modeling.py",
-    f"{CODE_STAGE}/pipeline_tasks.py",
-    f"{CODE_STAGE}/helpers/__init__.py",
-    f"{CODE_STAGE}/helpers/data_generation.py",
-    f"{CODE_STAGE}/helpers/feature_engineering.py",
-    f"{CODE_STAGE}/helpers/model_artifacts.py",
-    f"{CODE_STAGE}/helpers/inference_input.py",
+    f"{CODE_STAGE_SRC}/constants.py",
+    f"{CODE_STAGE_SRC}/data_ops.py",
+    f"{CODE_STAGE_SRC}/feature_ops.py",
+    f"{CODE_STAGE_SRC}/modeling.py",
+    f"{CODE_STAGE_SRC}/pipeline_tasks.py",
+    f"{CODE_STAGE_SRC}/helpers/__init__.py",
+    f"{CODE_STAGE_SRC}/helpers/data_generation.py",
+    f"{CODE_STAGE_SRC}/helpers/feature_engineering.py",
+    f"{CODE_STAGE_SRC}/helpers/model_artifacts.py",
+    f"{CODE_STAGE_SRC}/helpers/inference_input.py",
 ]
 
 # Packages required by the stored procedures
@@ -117,6 +123,21 @@ def refresh_git_repo(session: Session) -> None:
     print(f"Refreshing Git repository: {fqn_repo}")
     session.sql(f"ALTER GIT REPOSITORY {fqn_repo} FETCH").collect()
     print("Git repository refreshed.\n")
+
+
+def sync_git_to_code_stage(session: Session) -> None:
+    """
+    Copy source files from the Git repo stage to the internal CODE_STAGE.
+
+    StoredProcedureCall uses sproc.register(), which needs PUT (write) access
+    to the stage_location. Git repository stages are read-only, so we keep
+    CODE_STAGE as a writable internal stage and sync files into it from Git.
+    """
+    print(f"Syncing source files from Git stage to CODE_STAGE...")
+    # Clear CODE_STAGE and copy fresh files from Git repo stage
+    session.sql(f"REMOVE {CODE_STAGE}").collect()
+    session.sql(f"COPY FILES INTO {CODE_STAGE} FROM {GIT_SRC_PATH}").collect()
+    print("Source files synced to CODE_STAGE.\n")
 
 
 def register_job_definitions(session: Session) -> dict:
@@ -297,6 +318,9 @@ def deploy_dag(session: Session, execute: bool = False) -> None:
 
     # Refresh Git repo to ensure latest code is available for registration
     refresh_git_repo(session)
+
+    # Copy source files from Git stage to writable CODE_STAGE (needed by sproc.register)
+    sync_git_to_code_stage(session)
 
     # Ensure environment is set up
     ensure_environment(session)

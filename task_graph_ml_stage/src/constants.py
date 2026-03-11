@@ -31,8 +31,10 @@ GIT_SRC_PATH = f"{GIT_REPO_STAGE}/branches/{GIT_BRANCH}/task_graph_ml_stage/src"
 GIT_JOBS_PATH = f"{GIT_REPO_STAGE}/branches/{GIT_BRANCH}/task_graph_ml_stage/src/jobs"
 
 # -- Stages --
-# CODE_STAGE now points to the Git repo branch src path for SP imports
-CODE_STAGE = GIT_SRC_PATH
+# CODE_STAGE is an internal writable stage used by StoredProcedureCall (sproc.register
+# needs PUT access). Source files are copied from the Git repo stage into CODE_STAGE
+# before DAG deployment.
+CODE_STAGE = f"@{PIPELINE_DB}.{PIPELINE_SCHEMA}.CODE_STAGE"
 # JOB_STAGE remains as internal stage (scratch/payload stage used by MLJobDefinition)
 JOB_STAGE = f"@{PIPELINE_DB}.{PIPELINE_SCHEMA}.JOB_STAGE"
 DAG_STAGE = f"@{PIPELINE_DB}.{PIPELINE_SCHEMA}.DAG_STAGE"
