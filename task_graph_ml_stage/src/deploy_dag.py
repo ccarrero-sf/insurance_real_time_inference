@@ -350,6 +350,13 @@ def _release_task_ownership(session: Session) -> None:
     ).collect()
     print("  Ownership released.")
 
+    # After ownership transfer, CICD_DEPLOY_RL no longer owns the tasks and
+    # can't ALTER TASK RESUME. Grant OPERATE back so we can resume the root task.
+    session.sql(
+        f"GRANT OPERATE ON ALL TASKS IN SCHEMA {fqn_schema} "
+        f"TO ROLE {CICD_DEPLOY_ROLE}"
+    ).collect()
+
     # GRANT OWNERSHIP suspends the root task — resume it
     print(f"  Resuming root task {DAG_NAME}...")
     session.sql(
