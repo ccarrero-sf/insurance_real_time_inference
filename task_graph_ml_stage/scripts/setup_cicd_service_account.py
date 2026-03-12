@@ -203,6 +203,34 @@ def setup_cicd_service_account(session: Session, rsa_public_key: str) -> None:
             f"GRANT CREATE PROCEDURE ON SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
             "Grant create procedure",
         ),
+
+        # -- Grants: existing objects (tables, tasks, procedures created by other roles) --
+        (
+            f"GRANT ALL ON ALL TABLES IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
+            "Grant all existing tables in PIPELINE_STAGE",
+        ),
+        (
+            f"GRANT ALL ON ALL TABLES IN SCHEMA {DB_NAME}.DATA TO ROLE {CICD_ROLE}",
+            "Grant all existing tables in DATA",
+        ),
+        (
+            f"GRANT ALL ON ALL TASKS IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
+            "Grant all existing tasks in PIPELINE_STAGE",
+        ),
+        (
+            f"GRANT ALL ON ALL PROCEDURES IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
+            "Grant all existing procedures in PIPELINE_STAGE",
+        ),
+
+        # -- Future grants (for objects created by other roles later) --
+        (
+            f"GRANT ALL ON FUTURE TABLES IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
+            "Future grant on tables in PIPELINE_STAGE",
+        ),
+        (
+            f"GRANT ALL ON FUTURE TABLES IN SCHEMA {DB_NAME}.DATA TO ROLE {CICD_ROLE}",
+            "Future grant on tables in DATA",
+        ),
     ]
 
     print(f"Setting up CI/CD service account")
