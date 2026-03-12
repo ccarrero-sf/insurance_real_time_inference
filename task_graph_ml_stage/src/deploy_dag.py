@@ -339,8 +339,8 @@ def _release_task_ownership(session: Session) -> None:
     default). By transferring ownership to SPCS_PSE_ROLE, all tasks — including
     MLJobDefinition tasks — run with SPCS_PSE_ROLE privileges at runtime.
 
-    IMPORTANT: GRANT OWNERSHIP suspends the root task, so it must be resumed
-    after the transfer.
+    IMPORTANT: GRANT OWNERSHIP suspends ALL tasks in the schema. We must resume
+    every child task first, then the root task last (Snowflake requirement).
     """
     fqn_schema = f"{PIPELINE_DB}.{PIPELINE_SCHEMA}"
     print(f"Releasing task ownership to runtime role ({RUNTIME_OWNER_ROLE})...")
@@ -351,18 +351,30 @@ def _release_task_ownership(session: Session) -> None:
     print("  Ownership released.")
 
     # After ownership transfer, CICD_DEPLOY_RL no longer owns the tasks and
-    # can't ALTER TASK RESUME. Grant OPERATE back so we can resume the root task.
+    # can't ALTER TASK RESUME. Grant OPERATE back so we can resume them.
     session.sql(
         f"GRANT OPERATE ON ALL TASKS IN SCHEMA {fqn_schema} "
         f"TO ROLE {CICD_DEPLOY_ROLE}"
     ).collect()
 
-    # GRANT OWNERSHIP suspends the root task — resume it
-    print(f"  Resuming root task {DAG_NAME}...")
-    session.sql(
-        f"ALTER TASK {PIPELINE_DB}.{PIPELINE_SCHEMA}.{DAG_NAME} RESUME"
+    # Resume all tasks: children first, root last (Snowflake requirement).
+    print(f"  Resuming all DAG tasks...")
+    tasks = session.sql(
+        f"SHOW TASKS LIKE '%{DAG_NAME}%' IN SCHEMA {fqn_schema}"
     ).collect()
-    print("  Root task resumed.")
+
+    root_task = None
+    for t in tasks:
+        name = t["name"]
+        if name == DAG_NAME:
+            root_task = name
+            continue  # resume root last
+        session.sql(f"ALTER TASK {fqn_schema}.{name} RESUME").collect()
+        print(f"    Resumed child: {name}")
+
+    if root_task:
+        session.sql(f"ALTER TASK {fqn_schema}.{root_task} RESUME").collect()
+        print(f"    Resumed root:  {root_task}")
 
 
 def deploy_dag(session: Session, execute: bool = False) -> None:
