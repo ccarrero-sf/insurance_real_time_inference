@@ -8,6 +8,8 @@ CREATE ROLE, CREATE NETWORK POLICY privileges). It creates:
   2. A CICD_DEPLOY_USER service account (key-pair auth only, no password).
   3. A network policy that allows GitHub Actions runner IPs.
   4. Grants so the service account can deploy the ML pipeline DAG.
+  5. A PIPELINE_OPERATOR_RL role for humans to monitor and execute the DAG
+     (without deploy/alter privileges).
 
 Prerequisites:
   1. Generate a key pair for the service account:
@@ -42,6 +44,7 @@ Usage:
 
 Environment variables:
     RSA_PUBLIC_KEY          (required) Public key for the service account
+    OPERATOR_USER           (optional) Username to grant PIPELINE_OPERATOR_RL to
     SNOWFLAKE_WAREHOUSE     (optional, default: COMPUTE_WH)
     PIPELINE_DB             (optional, default: CC_INSURANCE_PIPELINE)
     SNOWFLAKE_COMPUTE_POOL  (optional, default: DEMO_POOL)
@@ -65,6 +68,9 @@ CICD_ROLE = "CICD_DEPLOY_RL"
 CICD_USER = "CICD_DEPLOY_USER"
 NETWORK_POLICY = "CICD_NETWORK_POLICY"
 NETWORK_RULE = "GITHUB_ACTIONS_NETWORK_RULE"
+
+# Operator role (for humans to monitor/execute the DAG)
+OPERATOR_ROLE = "PIPELINE_OPERATOR_RL"
 
 # GitHub Actions runner IP ranges.
 # GitHub runners use IPs from broad Azure ranges that change frequently and
@@ -265,6 +271,108 @@ def setup_cicd_service_account(session: Session, rsa_public_key: str) -> None:
     print(f"  4. Optionally set GitHub Variable:         SNOWFLAKE_ROLE = {CICD_ROLE}")
 
 
+def setup_operator_role(session: Session, operator_user: str | None = None) -> None:
+    """Create a read-only operator role for monitoring and executing the DAG.
+
+    This role can resume/suspend/execute tasks and read pipeline data, but
+    cannot create, alter, or drop any objects. Intended for human operators.
+    """
+    fqn_schema = f"{DB_NAME}.{SCHEMA_NAME}"
+
+    statements = [
+        # -- Role --
+        (
+            f"CREATE ROLE IF NOT EXISTS {OPERATOR_ROLE} "
+            f"COMMENT = 'Operator role for monitoring and executing the ML pipeline DAG "
+            f"(no deploy/alter privileges)'",
+            "Create operator role",
+        ),
+
+        # -- Warehouse --
+        (
+            f"GRANT USAGE ON WAREHOUSE {WAREHOUSE} TO ROLE {OPERATOR_ROLE}",
+            "Grant warehouse usage",
+        ),
+
+        # -- Database and schemas --
+        (
+            f"GRANT USAGE ON DATABASE {DB_NAME} TO ROLE {OPERATOR_ROLE}",
+            "Grant database usage",
+        ),
+        (
+            f"GRANT USAGE ON SCHEMA {fqn_schema} TO ROLE {OPERATOR_ROLE}",
+            "Grant schema PIPELINE_STAGE usage",
+        ),
+        (
+            f"GRANT USAGE ON SCHEMA {DB_NAME}.DATA TO ROLE {OPERATOR_ROLE}",
+            "Grant schema DATA usage",
+        ),
+
+        # -- Task execution (account-level) --
+        (
+            f"GRANT EXECUTE TASK ON ACCOUNT TO ROLE {OPERATOR_ROLE}",
+            "Grant execute task",
+        ),
+        (
+            f"GRANT EXECUTE MANAGED TASK ON ACCOUNT TO ROLE {OPERATOR_ROLE}",
+            "Grant execute managed task",
+        ),
+
+        # -- MONITOR + OPERATE on tasks (can resume/suspend/execute, not alter/drop) --
+        (
+            f"GRANT MONITOR, OPERATE ON ALL TASKS IN SCHEMA {fqn_schema} TO ROLE {OPERATOR_ROLE}",
+            "Grant operate on existing tasks",
+        ),
+        (
+            f"GRANT MONITOR, OPERATE ON FUTURE TASKS IN SCHEMA {fqn_schema} TO ROLE {OPERATOR_ROLE}",
+            "Grant operate on future tasks",
+        ),
+
+        # -- Read-only on tables --
+        (
+            f"GRANT SELECT ON ALL TABLES IN SCHEMA {fqn_schema} TO ROLE {OPERATOR_ROLE}",
+            "Grant select on PIPELINE_STAGE tables",
+        ),
+        (
+            f"GRANT SELECT ON ALL TABLES IN SCHEMA {DB_NAME}.DATA TO ROLE {OPERATOR_ROLE}",
+            "Grant select on DATA tables",
+        ),
+        (
+            f"GRANT SELECT ON FUTURE TABLES IN SCHEMA {fqn_schema} TO ROLE {OPERATOR_ROLE}",
+            "Future grant select on PIPELINE_STAGE tables",
+        ),
+        (
+            f"GRANT SELECT ON FUTURE TABLES IN SCHEMA {DB_NAME}.DATA TO ROLE {OPERATOR_ROLE}",
+            "Future grant select on DATA tables",
+        ),
+    ]
+
+    # Optionally assign the role to a user
+    if operator_user:
+        statements.append((
+            f"GRANT ROLE {OPERATOR_ROLE} TO USER {operator_user}",
+            f"Grant operator role to {operator_user}",
+        ))
+
+    print(f"Setting up operator role: {OPERATOR_ROLE}")
+    print()
+
+    for stmt, label in statements:
+        try:
+            session.sql(stmt).collect()
+            print(f"  OK: {label}")
+        except Exception as e:
+            print(f"  WARN: {label}")
+            print(f"        {e}")
+
+    print()
+    print("Operator role setup complete.")
+    if operator_user:
+        print(f"  User '{operator_user}' can now USE ROLE {OPERATOR_ROLE}")
+    print(f"  Allowed: EXECUTE TASK, ALTER TASK ... RESUME/SUSPEND, SELECT on tables")
+    print(f"  Denied:  CREATE/DROP/REPLACE tasks or other objects")
+
+
 def get_session() -> Session:
     """Create a Snowpark session. Must connect as ACCOUNTADMIN."""
     return Session.builder.config("connection_name", "keypair").create()
@@ -283,11 +391,17 @@ if __name__ == "__main__":
         print('  export RSA_PUBLIC_KEY="$(grep -v "BEGIN\\|END" cicd_rsa_key.pub | tr -d \'\\n\')"')
         sys.exit(1)
 
+    operator_user = os.getenv("OPERATOR_USER", "").strip() or None
+
     session = get_session()
     print(f"Connected as: {session.get_current_role()}")
     print()
 
     try:
         setup_cicd_service_account(session, rsa_public_key)
+        print()
+        print("=" * 60)
+        print()
+        setup_operator_role(session, operator_user)
     finally:
         session.close()

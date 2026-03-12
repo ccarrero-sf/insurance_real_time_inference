@@ -464,6 +464,83 @@ python deploy_dag.py          # Deploy DAG (suspended)
 python deploy_dag.py --execute  # Deploy and immediately execute
 ```
 
+### Variant C: `task_graph_ml_stage/` (CI/CD with GitHub Actions)
+
+Extends Variant B with automated CI/CD deployment via GitHub Actions. Code is loaded from a **Git Repository stage** (`ML_PIPELINE_GIT_REPO`) instead of a manually-uploaded `@CODE_STAGE`. Pushing to `main` automatically deploys the DAG.
+
+- Quality threshold: R2 >= 0.5 (with 0.05 tolerance)
+- Schema: `CC_INSURANCE_PIPELINE.PIPELINE_STAGE`
+- Code source: Git Repository stage (auto-synced on deploy)
+- Authentication: Key-pair (no password)
+
+#### Roles
+
+| Role | Purpose | Assigned To |
+|------|---------|-------------|
+| `CICD_DEPLOY_RL` | Deploy/replace DAG, sync Git repo, manage stages | `CICD_DEPLOY_USER` (service account) |
+| `PIPELINE_OPERATOR_RL` | Monitor, execute, suspend/resume tasks | Human users (e.g., `CCARRERO`) |
+
+#### CI/CD Setup
+
+1. **Generate a key pair** for the service account:
+
+```bash
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out cicd_rsa_key.p8 -nocrypt
+openssl rsa -in cicd_rsa_key.p8 -pubout -out cicd_rsa_key.pub
+```
+
+2. **Run the setup script** (requires ACCOUNTADMIN):
+
+```bash
+cd task_graph_ml_stage
+
+# Set required environment variables
+export PUBLIC_KEY=$(cat cicd_rsa_key.pub | grep -v "BEGIN\|END" | tr -d '\n')
+export OPERATOR_USER=CCARRERO  # User who will operate the pipeline
+
+python scripts/setup_cicd_service_account.py
+```
+
+This creates:
+- `CICD_DEPLOY_USER` service account with key-pair auth
+- `CICD_DEPLOY_RL` role with deploy privileges
+- `CICD_NETWORK_POLICY` allowing GitHub Actions IPs
+- `PIPELINE_OPERATOR_RL` role granted to the specified user
+
+3. **Configure GitHub Secrets** in your repository:
+
+| Secret/Variable | Value |
+|-----------------|-------|
+| `SNOWFLAKE_ACCOUNT` | Your Snowflake account identifier (e.g., `phb14991`) |
+| `SNOWFLAKE_USER` | `CICD_DEPLOY_USER` |
+| `SNOWFLAKE_PRIVATE_KEY` | Contents of `cicd_rsa_key.p8` |
+
+4. **Deploy**: Push changes to `task_graph_ml_stage/` on `main` branch, or trigger manually via `workflow_dispatch`.
+
+#### Operating the Pipeline
+
+Use `PIPELINE_OPERATOR_RL` to monitor and control tasks without deploy privileges:
+
+```sql
+USE ROLE PIPELINE_OPERATOR_RL;
+
+-- Check DAG status
+SHOW TASKS IN SCHEMA CC_INSURANCE_PIPELINE.PIPELINE_STAGE;
+
+-- Execute the DAG manually
+EXECUTE TASK CC_INSURANCE_PIPELINE.PIPELINE_STAGE.CAR_INSURANCE_ML_PIPELINE;
+
+-- Suspend/resume the DAG
+ALTER TASK CC_INSURANCE_PIPELINE.PIPELINE_STAGE.CAR_INSURANCE_ML_PIPELINE SUSPEND;
+ALTER TASK CC_INSURANCE_PIPELINE.PIPELINE_STAGE.CAR_INSURANCE_ML_PIPELINE RESUME;
+
+-- View task run history
+SELECT *
+FROM TABLE(CC_INSURANCE_PIPELINE.INFORMATION_SCHEMA.TASK_HISTORY())
+ORDER BY SCHEDULED_TIME DESC
+LIMIT 20;
+```
+
 ### Monitoring the Pipeline
 
 ```sql
@@ -570,13 +647,15 @@ DROP DATABASE IF EXISTS CC_INSURANCE_PIPELINE;
 
 ### Automated Pipeline (Task Graph)
 
-| Parameter | `task_graph/` | `task_graph_stage/` |
-|-----------|---------------|---------------------|
-| Database | `CC_INSURANCE_PIPELINE` | `CC_INSURANCE_PIPELINE` |
-| Schema | `PIPELINE` | `PIPELINE_STG` |
-| Data Schema | `DATA` | `DATA` |
-| Compute Pool | `DEMO_POOL` | `DEMO_POOL` |
-| DAG Name | `CAR_INSURANCE_ML_PIPELINE` | `CAR_INSURANCE_ML_PIPELINE` |
-| Schedule | Daily 6am UTC | Daily 6am UTC |
-| Quality Threshold | R2 >= 0.7 | R2 >= 0.5 (± 0.05 tolerance) |
-| Code Loading | Direct serialization | Dynamic import from `@CODE_STAGE` |
+| Parameter | `task_graph/` | `task_graph_stage/` | `task_graph_ml_stage/` |
+|-----------|---------------|---------------------|------------------------|
+| Database | `CC_INSURANCE_PIPELINE` | `CC_INSURANCE_PIPELINE` | `CC_INSURANCE_PIPELINE` |
+| Schema | `PIPELINE` | `PIPELINE_STG` | `PIPELINE_STAGE` |
+| Data Schema | `DATA` | `DATA` | `DATA` |
+| Compute Pool | `DEMO_POOL` | `DEMO_POOL` | `DEMO_POOL` |
+| DAG Name | `CAR_INSURANCE_ML_PIPELINE` | `CAR_INSURANCE_ML_PIPELINE` | `CAR_INSURANCE_ML_PIPELINE` |
+| Schedule | Daily 6am UTC | Daily 6am UTC | Daily 9am UTC |
+| Quality Threshold | R2 >= 0.7 | R2 >= 0.5 (± 0.05 tolerance) | R2 >= 0.5 (± 0.05 tolerance) |
+| Code Loading | Direct serialization | Dynamic import from `@CODE_STAGE` | Git Repository stage (`ML_PIPELINE_GIT_REPO`) |
+| Deployment | Manual | Manual | CI/CD (GitHub Actions) |
+| Auth | Password/SSO | Password/SSO | Key-pair (service account) |
