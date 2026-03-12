@@ -1,0 +1,49 @@
+name: Deploy ML Pipeline DAG
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'task_graph_ml_stage/**'
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  deploy:
+    name: Deploy DAG to Snowflake
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: task_graph_ml_stage/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r task_graph_ml_stage/requirements.txt
+
+      - name: Write private key to file
+        run: |
+          echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > /tmp/snowflake_key.p8
+          chmod 600 /tmp/snowflake_key.p8
+
+      - name: Deploy DAG
+        working-directory: task_graph_ml_stage/src
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PRIVATE_KEY_FILE: /tmp/snowflake_key.p8
+          SNOWFLAKE_ROLE: ${{ vars.SNOWFLAKE_ROLE || 'SPCS_PSE_ROLE' }}
+          SNOWFLAKE_WAREHOUSE: ${{ vars.SNOWFLAKE_WAREHOUSE || 'COMPUTE_WH' }}
+        run: python deploy_dag.py
+
+      - name: Clean up private key
+        if: always()
+        run: rm -f /tmp/snowflake_key.p8

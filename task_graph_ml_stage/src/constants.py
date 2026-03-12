@@ -1,12 +1,12 @@
 import os
 
 # =============================================================================
-# Car Insurance ML Pipeline (submit_from_stage version) - Configuration Constants
+# Car Insurance ML Pipeline - Configuration Constants
 # =============================================================================
 # All values can be overridden via environment variables.
-# This version uses MLJobDefinition.register() with source pointing to a
-# Snowflake Git Repository stage, so code is sourced from Git rather than
-# uploaded from local directories.
+# MLJobDefinition.register() uses source pointing to a Snowflake Git
+# Repository stage. Code is synced from Git to CODE_STAGE at deploy time
+# by CI/CD (GitHub Actions). There is no runtime Git refresh task.
 # =============================================================================
 
 # -- Snowflake Role & Warehouse --

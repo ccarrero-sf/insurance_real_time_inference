@@ -1,65 +1,23 @@
 """
-Pipeline Task Entry Points for Car Insurance ML DAG (submit_from_stage version).
+Pipeline Task Entry Points for Car Insurance ML DAG.
 
-In this version, heavy compute tasks (ingest, train, inference) run as ML Jobs
-via MLJobDefinition.register() with source pointing to a Snowflake Git
-Repository stage. The code is sourced from Git rather than uploaded from local.
+Heavy compute tasks (ingest, train, inference) run as ML Jobs via
+MLJobDefinition.register() with source pointing to a Snowflake Git
+Repository stage. The code is sourced from Git rather than uploaded
+from local.
 
-The remaining tasks here (prepare_data, check_quality, promote_model,
-send_alert, cleanup) run on the warehouse as StoredProcedure-based tasks
-since they perform lightweight operations (Feature Store setup, registry
-lookups, metric comparisons, etc.).
+The tasks here (prepare_data, check_quality, promote_model, send_alert,
+cleanup) run on the warehouse as StoredProcedure-based tasks since they
+perform lightweight operations (Feature Store setup, registry lookups,
+metric comparisons, etc.).
 
-Additionally, task_refresh_git runs as the first task in the DAG to ensure
-the Git Repository stage has the latest code before any pipeline execution.
+Code is synced from the Git stage to CODE_STAGE at deploy time by CI/CD.
 """
 
 import json
-from datetime import datetime
 
 from snowflake.core.task.context import TaskContext
 from snowflake.snowpark import Session
-
-
-# =============================================================================
-# Task: Refresh Git Repository (first task in DAG)
-# =============================================================================
-
-def task_refresh_git(session: Session) -> str:
-    """
-    Refresh the Git Repository stage and sync source files to CODE_STAGE.
-
-    Runs ALTER GIT REPOSITORY ... FETCH to pull the latest code from the remote
-    Git repository, then copies source files from the Git stage into the internal
-    CODE_STAGE so that downstream StoredProcedureCall tasks use the latest code.
-
-    This is the first task in the DAG, so all subsequent tasks will use the
-    latest code from the Git repository.
-    """
-    from constants import (
-        PIPELINE_DB, PIPELINE_SCHEMA, GIT_REPO_NAME, GIT_SRC_PATH, CODE_STAGE,
-    )
-
-    print("=== TASK: Refresh Git Repository ===")
-
-    fqn_repo = f"{PIPELINE_DB}.{PIPELINE_SCHEMA}.{GIT_REPO_NAME}"
-    print(f"Fetching latest from: {fqn_repo}")
-
-    session.sql(f"ALTER GIT REPOSITORY {fqn_repo} FETCH").collect()
-    print("Git repository refreshed.")
-
-    # Sync source files from Git stage to writable CODE_STAGE
-    print(f"Syncing files from Git stage to CODE_STAGE...")
-    session.sql(f"COPY FILES INTO {CODE_STAGE} FROM {GIT_SRC_PATH}").collect()
-    print("CODE_STAGE synced with latest Git code.")
-
-    return_value = json.dumps({
-        "status": "refreshed",
-        "repository": fqn_repo,
-        "timestamp": datetime.now().isoformat(),
-    })
-    TaskContext(session).set_return_value(return_value)
-    return return_value
 
 
 # =============================================================================

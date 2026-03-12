@@ -1,1 +1,8 @@
 secrets.toml
+
+# Private keys and credentials
+*.p8
+*.pem
+*.key
+.env
+.env.*

@@ -1,14 +1,14 @@
 """
-Deploy the Car Insurance ML Pipeline as a Snowflake Task Graph (submit_from_stage version).
+Deploy the Car Insurance ML Pipeline as a Snowflake Task Graph.
 
-This version uses MLJobDefinition.register() with source pointing to a
-Snowflake Git Repository stage. Code is sourced from Git rather than uploaded
-from a local directory. Each ML Job (ingest, train, inference) is a standalone
-Python script in the jobs/ directory within the Git repo, registered as an
-MLJobDefinition that can be reused across multiple DAG runs.
+This script is designed to run from CI/CD (GitHub Actions) on every push to
+main, as well as locally for development. It registers MLJobDefinitions from
+the Snowflake Git Repository stage and deploys the DAG.
 
-A REFRESH_GIT task runs first in the DAG to ensure the Git Repository stage
-has the latest committed code before any pipeline task executes.
+At deploy time the script refreshes the Git repo stage and syncs source files
+to CODE_STAGE so that all tasks use the code from the commit that triggered
+the deployment. There is no runtime REFRESH_GIT task — the DAG always runs
+with the code that was current at deploy time.
 
 Lightweight tasks (prepare_data, check_quality, promote_model, send_alert,
 cleanup) use StoredProcedureCall on the warehouse. Because sproc.register()
@@ -18,7 +18,7 @@ files are copied from the Git stage into CODE_STAGE via COPY FILES.
 
 DAG structure:
 
-    REFRESH_GIT (SP) >> INGEST_DATA (MLJobDefinition) >> PREPARE_DATA (SP)
+    INGEST_DATA (MLJobDefinition) >> PREPARE_DATA (SP)
     >> TRAIN_MODEL (MLJobDefinition) >> CHECK_QUALITY (SP Branch)
     >> [PROMOTE_MODEL (SP), SEND_ALERT (SP)]
     PROMOTE_MODEL >> RUN_INFERENCE (MLJobDefinition)
@@ -34,6 +34,10 @@ Usage:
 
     --execute: Deploy and immediately execute the DAG once.
                Without this flag, the DAG is created in suspended state.
+
+    Environment variables (for CI/CD):
+        SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY_FILE
+        Optional: SNOWFLAKE_ROLE, SNOWFLAKE_WAREHOUSE
 """
 
 import argparse
@@ -64,7 +68,6 @@ from constants import (
 
 # Import SP-based task functions for warehouse tasks
 from pipeline_tasks import (
-    task_refresh_git,
     task_prepare_data,
     task_check_quality,
     task_promote_model,
@@ -191,10 +194,10 @@ def create_dag(session: Session, job_definitions: dict) -> DAG:
     """
     Define the Car Insurance ML Pipeline DAG.
 
-    Starts with REFRESH_GIT to sync latest code from Git, then proceeds
-    with the ML pipeline. ML Job tasks (ingest, train, inference) use
-    MLJobDefinition objects. Warehouse tasks (refresh_git, prepare_data,
-    check_quality, promote, alert, cleanup) use StoredProcedureCall.
+    ML Job tasks (ingest, train, inference) use MLJobDefinition objects.
+    Warehouse tasks (prepare_data, check_quality, promote, alert, cleanup)
+    use StoredProcedureCall. Code is synced from Git at deploy time (CI/CD),
+    so there is no runtime Git refresh task.
     """
     dag = DAG(
         name=DAG_NAME,
@@ -202,22 +205,10 @@ def create_dag(session: Session, job_definitions: dict) -> DAG:
         warehouse=WAREHOUSE,
         stage_location=CODE_STAGE,
         use_func_return_value=True,
-        comment="Car Insurance ML pipeline (submit_from_stage version): git-sourced, ingest, prepare, train, evaluate, promote, infer",
+        comment="Car Insurance ML pipeline: CI/CD deployed, ingest, prepare, train, evaluate, promote, infer",
     )
 
     with dag:
-        # -- Task 0: Refresh Git Repository (first task, ensures latest code) --
-        refresh_git = DAGTask(
-            name="REFRESH_GIT",
-            definition=StoredProcedureCall(
-                func=task_refresh_git,
-                stage_location=CODE_STAGE,
-                imports=STAGE_IMPORTS,
-                packages=PACKAGES,
-            ),
-            warehouse=WAREHOUSE,
-        )
-
         # -- Task 1: Ingest Data (MLJobDefinition on compute pool) --
         ingest_data = DAGTask(
             name="INGEST_DATA",
@@ -298,10 +289,10 @@ def create_dag(session: Session, job_definitions: dict) -> DAG:
         )
 
         # -- Define Dependencies --
-        # REFRESH_GIT >> INGEST_DATA >> PREPARE_DATA >> TRAIN_MODEL >> CHECK_QUALITY
+        # INGEST_DATA >> PREPARE_DATA >> TRAIN_MODEL >> CHECK_QUALITY
         # >> [PROMOTE_MODEL, SEND_ALERT]
         # PROMOTE_MODEL >> RUN_INFERENCE
-        refresh_git >> ingest_data >> prepare_data >> train_model >> check_quality >> [promote_model, send_alert]
+        ingest_data >> prepare_data >> train_model >> check_quality >> [promote_model, send_alert]
         promote_model >> run_inference
 
     return dag
@@ -367,12 +358,26 @@ def deploy_dag(session: Session, execute: bool = False) -> None:
 
 
 def get_session() -> Session:
-    """Create a Snowpark session from the default connection."""
+    """Create a Snowpark session.
+
+    In CI/CD (GitHub Actions), connection parameters come from environment
+    variables (SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY_FILE).
+    Locally, the named 'keypair' connection from ~/.snowflake/connections.toml
+    is used.
+    """
+    if os.getenv("SNOWFLAKE_ACCOUNT"):
+        return Session.builder.configs({
+            "account": os.environ["SNOWFLAKE_ACCOUNT"],
+            "user": os.environ["SNOWFLAKE_USER"],
+            "private_key_file": os.environ["SNOWFLAKE_PRIVATE_KEY_FILE"],
+            "role": os.getenv("SNOWFLAKE_ROLE", ROLE_NAME),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", WAREHOUSE),
+        }).create()
     return Session.builder.config("connection_name", "keypair").create()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Deploy the Car Insurance ML Pipeline DAG (submit_from_stage version)")
+    parser = argparse.ArgumentParser(description="Deploy the Car Insurance ML Pipeline DAG")
     parser.add_argument(
         "--execute",
         action="store_true",
