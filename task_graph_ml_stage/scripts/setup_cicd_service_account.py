@@ -38,12 +38,19 @@ Prerequisites:
        SNOWFLAKE_WAREHOUSE = COMPUTE_WH      (default in workflow)
 
 Usage:
-    # Must connect as ACCOUNTADMIN
+    # First time: create user + grants
     export RSA_PUBLIC_KEY="MIIBIjANBgkq..."
+    export OPERATOR_USER=CCARRERO
+    python setup_cicd_service_account.py
+
+    # Re-run after schema rebuild: grants only (no RSA_PUBLIC_KEY needed)
+    export OPERATOR_USER=CCARRERO
     python setup_cicd_service_account.py
 
 Environment variables:
-    RSA_PUBLIC_KEY          (required) Public key for the service account
+    RSA_PUBLIC_KEY          (optional) Public key for the service account.
+                            If omitted, skips user/network policy creation
+                            and runs grants + operator role setup only.
     OPERATOR_USER           (optional) Username to grant PIPELINE_OPERATOR_RL to
     SNOWFLAKE_WAREHOUSE     (optional, default: COMPUTE_WH)
     PIPELINE_DB             (optional, default: CC_INSURANCE_PIPELINE)
@@ -135,6 +142,53 @@ def setup_cicd_service_account(session: Session, rsa_public_key: str) -> None:
             f"ALTER USER {CICD_USER} SET NETWORK_POLICY = {NETWORK_POLICY}",
             "Apply network policy to service account",
         ),
+    ]
+
+    print(f"Setting up CI/CD service account")
+    print(f"  Role:     {CICD_ROLE}")
+    print(f"  User:     {CICD_USER}")
+    print(f"  Policy:   {NETWORK_POLICY}")
+    print(f"  Database: {DB_NAME}")
+    print(f"  Pool:     {COMPUTE_POOL}")
+    print()
+
+    for stmt, label in statements:
+        try:
+            session.sql(stmt).collect()
+            print(f"  OK: {label}")
+        except Exception as e:
+            print(f"  WARN: {label}")
+            print(f"        {e}")
+
+    # Run grants
+    setup_cicd_grants(session)
+
+    print()
+    print("CI/CD service account setup complete.")
+    print()
+    print("Next steps:")
+    print("  1. Store the private key as GitHub Secret: SNOWFLAKE_PRIVATE_KEY")
+    print(f"  2. Store the account ID as GitHub Secret:  SNOWFLAKE_ACCOUNT")
+    print(f"  3. Store '{CICD_USER}' as GitHub Secret:   SNOWFLAKE_USER")
+    print(f"  4. Optionally set GitHub Variable:         SNOWFLAKE_ROLE = {CICD_ROLE}")
+
+
+def setup_cicd_grants(session: Session) -> None:
+    """Grant all required privileges to the CI/CD role.
+
+    Can be run independently when the user/network policy already exist
+    (e.g., after recreating a schema).
+    """
+    fqn_schema = f"{DB_NAME}.{SCHEMA_NAME}"
+    fqn_repo = f"{fqn_schema}.{GIT_REPO_NAME}"
+
+    statements = [
+        # -- Ensure role exists --
+        (
+            f"CREATE ROLE IF NOT EXISTS {CICD_ROLE} "
+            f"COMMENT = 'Role for GitHub Actions CI/CD pipeline deployments'",
+            "Ensure CI/CD role exists",
+        ),
 
         # -- Grants: warehouse --
         (
@@ -202,6 +256,10 @@ def setup_cicd_service_account(session: Session, rsa_public_key: str) -> None:
             "Grant create table",
         ),
         (
+            f"GRANT CREATE TABLE ON SCHEMA {DB_NAME}.DATA TO ROLE {CICD_ROLE}",
+            "Grant create table in DATA",
+        ),
+        (
             f"GRANT CREATE TASK ON SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
             "Grant create task",
         ),
@@ -243,14 +301,15 @@ def setup_cicd_service_account(session: Session, rsa_public_key: str) -> None:
             f"GRANT OWNERSHIP ON ALL TASKS IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE} COPY CURRENT GRANTS",
             "Transfer ownership of existing tasks to CI/CD role",
         ),
+
+        # -- Transfer ownership of existing tables in DATA (needed for TRUNCATE/overwrite) --
+        (
+            f"GRANT OWNERSHIP ON ALL TABLES IN SCHEMA {DB_NAME}.DATA TO ROLE {CICD_ROLE} COPY CURRENT GRANTS",
+            "Transfer ownership of DATA tables to CI/CD role",
+        ),
     ]
 
-    print(f"Setting up CI/CD service account")
-    print(f"  Role:     {CICD_ROLE}")
-    print(f"  User:     {CICD_USER}")
-    print(f"  Policy:   {NETWORK_POLICY}")
-    print(f"  Database: {DB_NAME}")
-    print(f"  Pool:     {COMPUTE_POOL}")
+    print(f"Setting up CI/CD grants for role: {CICD_ROLE}")
     print()
 
     for stmt, label in statements:
@@ -260,15 +319,6 @@ def setup_cicd_service_account(session: Session, rsa_public_key: str) -> None:
         except Exception as e:
             print(f"  WARN: {label}")
             print(f"        {e}")
-
-    print()
-    print("CI/CD service account setup complete.")
-    print()
-    print("Next steps:")
-    print("  1. Store the private key as GitHub Secret: SNOWFLAKE_PRIVATE_KEY")
-    print(f"  2. Store the account ID as GitHub Secret:  SNOWFLAKE_ACCOUNT")
-    print(f"  3. Store '{CICD_USER}' as GitHub Secret:   SNOWFLAKE_USER")
-    print(f"  4. Optionally set GitHub Variable:         SNOWFLAKE_ROLE = {CICD_ROLE}")
 
 
 def setup_operator_role(session: Session, operator_user: str | None = None) -> None:
@@ -374,23 +424,14 @@ def setup_operator_role(session: Session, operator_user: str | None = None) -> N
 
 
 def get_session() -> Session:
-    """Create a Snowpark session. Must connect as ACCOUNTADMIN."""
-    return Session.builder.config("connection_name", "keypair").create()
+    """Create a Snowpark session using the keypair connection, then switch to ACCOUNTADMIN."""
+    session = Session.builder.config("connection_name", "keypair").create()
+    session.sql("USE ROLE ACCOUNTADMIN").collect()
+    return session
 
 
 if __name__ == "__main__":
-    rsa_public_key = os.getenv("RSA_PUBLIC_KEY", "").strip()
-    if not rsa_public_key:
-        print("ERROR: RSA_PUBLIC_KEY environment variable is required.")
-        print()
-        print("Generate a key pair first:")
-        print("  openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out cicd_rsa_key.p8 -nocrypt")
-        print("  openssl rsa -in cicd_rsa_key.p8 -pubout -out cicd_rsa_key.pub")
-        print()
-        print("Then export the public key (single line, no headers):")
-        print('  export RSA_PUBLIC_KEY="$(grep -v "BEGIN\\|END" cicd_rsa_key.pub | tr -d \'\\n\')"')
-        sys.exit(1)
-
+    rsa_public_key = os.getenv("RSA_PUBLIC_KEY", "").strip() or None
     operator_user = os.getenv("OPERATOR_USER", "").strip() or None
 
     session = get_session()
@@ -398,7 +439,14 @@ if __name__ == "__main__":
     print()
 
     try:
-        setup_cicd_service_account(session, rsa_public_key)
+        if rsa_public_key:
+            setup_cicd_service_account(session, rsa_public_key)
+        else:
+            print("RSA_PUBLIC_KEY not set -- skipping user/network policy creation.")
+            print("Running grants-only setup (user and network policy must already exist).")
+            print()
+            setup_cicd_grants(session)
+
         print()
         print("=" * 60)
         print()
