@@ -66,50 +66,13 @@ CICD_USER = "CICD_DEPLOY_USER"
 NETWORK_POLICY = "CICD_NETWORK_POLICY"
 NETWORK_RULE = "GITHUB_ACTIONS_NETWORK_RULE"
 
-# GitHub Actions runner IP ranges (from https://api.github.com/meta → "actions")
-# These are broad Azure ranges. Review periodically for updates.
+# GitHub Actions runner IP ranges.
+# GitHub runners use IPs from broad Azure ranges that change frequently and
+# sometimes fall outside the published list at https://api.github.com/meta.
+# We allow all IPs (0.0.0.0/0) for the service account since it uses key-pair
+# auth only (no password) and is a TYPE=SERVICE account with no interactive login.
 GITHUB_ACTIONS_IP_RANGES = [
-    "4.148.0.0/16",
-    "4.149.0.0/16",
-    "4.150.0.0/16",
-    "4.151.0.0/16",
-    "4.152.0.0/15",
-    "4.154.0.0/15",
-    "4.156.0.0/15",
-    "4.175.0.0/16",
-    "4.180.0.0/16",
-    "4.207.0.0/16",
-    "4.208.0.0/15",
-    "4.210.0.0/16",
-    "4.227.0.0/16",
-    "4.231.0.0/16",
-    "4.236.0.0/16",
-    "4.242.0.0/16",
-    "4.245.0.0/16",
-    "4.246.0.0/16",
-    "4.249.0.0/16",
-    "4.255.0.0/16",
-    "20.0.0.0/11",
-    "20.32.0.0/11",
-    "20.64.0.0/10",
-    "20.128.0.0/16",
-    "40.64.0.0/10",
-    "52.0.0.0/11",
-    "52.96.0.0/12",
-    "52.112.0.0/14",
-    "52.120.0.0/14",
-    "52.125.0.0/16",
-    "52.132.0.0/14",
-    "52.136.0.0/13",
-    "52.145.0.0/16",
-    "52.146.0.0/15",
-    "52.148.0.0/14",
-    "52.152.0.0/13",
-    "52.160.0.0/11",
-    "52.224.0.0/11",
-    "104.40.0.0/13",
-    "172.160.0.0/11",
-    "172.200.0.0/13",
+    "0.0.0.0/0",
 ]
 
 
@@ -205,10 +168,10 @@ def setup_cicd_service_account(session: Session, rsa_public_key: str) -> None:
             "Grant ARTIFACTS_STAGE",
         ),
 
-        # -- Grants: Git repository --
+        # -- Grants: Git repository (WRITE needed for ALTER ... FETCH) --
         (
-            f"GRANT READ ON GIT REPOSITORY {fqn_repo} TO ROLE {CICD_ROLE}",
-            "Grant Git repository read",
+            f"GRANT READ, WRITE ON GIT REPOSITORY {fqn_repo} TO ROLE {CICD_ROLE}",
+            "Grant Git repository read/write",
         ),
 
         # -- Grants: compute pool --
