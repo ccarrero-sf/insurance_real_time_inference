@@ -240,7 +240,7 @@ def setup_cicd_grants(session: Session) -> None:
             "Grant compute pool usage",
         ),
 
-        # -- Grants: task execution --
+        # -- Grants: task execution (needed to deploy tasks) --
         (
             f"GRANT EXECUTE TASK ON ACCOUNT TO ROLE {CICD_ROLE}",
             "Grant execute task",
@@ -248,6 +248,16 @@ def setup_cicd_grants(session: Session) -> None:
         (
             f"GRANT EXECUTE MANAGED TASK ON ACCOUNT TO ROLE {CICD_ROLE}",
             "Grant execute managed task",
+        ),
+
+        # -- Grants: MANAGE GRANTS (needed to claim/release task ownership) --
+        # The deploy script uses a claim→deploy→release pattern: it temporarily
+        # takes OWNERSHIP of tasks owned by SPCS_PSE_ROLE, deploys with CREATE
+        # OR REPLACE, then transfers OWNERSHIP back. MANAGE GRANTS is required
+        # to take ownership from another role.
+        (
+            f"GRANT MANAGE GRANTS ON ACCOUNT TO ROLE {CICD_ROLE}",
+            "Grant manage grants (for ownership transfer)",
         ),
 
         # -- Grants: create objects --
@@ -268,7 +278,7 @@ def setup_cicd_grants(session: Session) -> None:
             "Grant create procedure",
         ),
 
-        # -- Grants: existing objects (tables, tasks, procedures created by other roles) --
+        # -- Grants: existing objects (DML on tables, not OWNERSHIP) --
         (
             f"GRANT ALL ON ALL TABLES IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
             "Grant all existing tables in PIPELINE_STAGE",
@@ -276,10 +286,6 @@ def setup_cicd_grants(session: Session) -> None:
         (
             f"GRANT ALL ON ALL TABLES IN SCHEMA {DB_NAME}.DATA TO ROLE {CICD_ROLE}",
             "Grant all existing tables in DATA",
-        ),
-        (
-            f"GRANT ALL ON ALL TASKS IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
-            "Grant all existing tasks in PIPELINE_STAGE",
         ),
         (
             f"GRANT ALL ON ALL PROCEDURES IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE}",
@@ -296,16 +302,16 @@ def setup_cicd_grants(session: Session) -> None:
             "Future grant on tables in DATA",
         ),
 
-        # -- Transfer ownership of existing tasks (needed for CREATE OR REPLACE) --
+        # -- Task execution grants for the runtime owner role --
+        # Tasks run as their owner (SPCS_PSE_ROLE). That role needs EXECUTE TASK
+        # so the Snowflake scheduler can run them.
         (
-            f"GRANT OWNERSHIP ON ALL TASKS IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE} COPY CURRENT GRANTS",
-            "Transfer ownership of existing tasks to CI/CD role",
+            f"GRANT EXECUTE TASK ON ACCOUNT TO ROLE SPCS_PSE_ROLE",
+            "Grant execute task to runtime owner (SPCS_PSE_ROLE)",
         ),
-
-        # -- Transfer ownership of existing tables in DATA (needed for TRUNCATE/overwrite) --
         (
-            f"GRANT OWNERSHIP ON ALL TABLES IN SCHEMA {DB_NAME}.DATA TO ROLE {CICD_ROLE} COPY CURRENT GRANTS",
-            "Transfer ownership of DATA tables to CI/CD role",
+            f"GRANT EXECUTE MANAGED TASK ON ACCOUNT TO ROLE SPCS_PSE_ROLE",
+            "Grant execute managed task to runtime owner (SPCS_PSE_ROLE)",
         ),
     ]
 

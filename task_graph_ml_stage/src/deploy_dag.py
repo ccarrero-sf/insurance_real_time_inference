@@ -66,6 +66,11 @@ from constants import (
     COMPUTE_POOL,
 )
 
+# Role that should own all tasks at runtime (tasks execute as owner)
+RUNTIME_OWNER_ROLE = "SPCS_PSE_ROLE"
+# CI/CD deployment role (temporary owner during CREATE OR REPLACE)
+CICD_DEPLOY_ROLE = "CICD_DEPLOY_RL"
+
 # Import SP-based task functions for warehouse tasks
 from pipeline_tasks import (
     task_prepare_data,
@@ -298,8 +303,74 @@ def create_dag(session: Session, job_definitions: dict) -> DAG:
     return dag
 
 
+def _is_cicd_deploy(session: Session) -> bool:
+    """Check if we are deploying as the CI/CD role (not the runtime owner)."""
+    current_role = session.get_current_role()
+    # get_current_role() may return quoted identifiers like '"CICD_DEPLOY_RL"'
+    if current_role:
+        current_role = current_role.strip('"')
+    return current_role == CICD_DEPLOY_ROLE
+
+
+def _claim_task_ownership(session: Session) -> None:
+    """Transfer ownership of existing tasks to CICD_DEPLOY_RL for CREATE OR REPLACE.
+
+    CREATE OR REPLACE TASK requires OWNERSHIP on any pre-existing task.
+    This is a temporary claim — ownership is released back to the runtime
+    role after deployment.
+    """
+    fqn_schema = f"{PIPELINE_DB}.{PIPELINE_SCHEMA}"
+    print(f"Claiming task ownership for deployment ({CICD_DEPLOY_ROLE})...")
+    try:
+        session.sql(
+            f"GRANT OWNERSHIP ON ALL TASKS IN SCHEMA {fqn_schema} "
+            f"TO ROLE {CICD_DEPLOY_ROLE} COPY CURRENT GRANTS"
+        ).collect()
+        print("  Ownership claimed.")
+    except Exception as e:
+        # No tasks yet (first deploy) — safe to ignore
+        print(f"  Skipped (no existing tasks or already owned): {e}")
+
+
+def _release_task_ownership(session: Session) -> None:
+    """Transfer ownership of all tasks back to the runtime owner role.
+
+    Tasks execute with the privileges of their owner (EXECUTE AS OWNER is the
+    default). By transferring ownership to SPCS_PSE_ROLE, all tasks — including
+    MLJobDefinition tasks — run with SPCS_PSE_ROLE privileges at runtime.
+
+    IMPORTANT: GRANT OWNERSHIP suspends the root task, so it must be resumed
+    after the transfer.
+    """
+    fqn_schema = f"{PIPELINE_DB}.{PIPELINE_SCHEMA}"
+    print(f"Releasing task ownership to runtime role ({RUNTIME_OWNER_ROLE})...")
+    session.sql(
+        f"GRANT OWNERSHIP ON ALL TASKS IN SCHEMA {fqn_schema} "
+        f"TO ROLE {RUNTIME_OWNER_ROLE} COPY CURRENT GRANTS"
+    ).collect()
+    print("  Ownership released.")
+
+    # GRANT OWNERSHIP suspends the root task — resume it
+    print(f"  Resuming root task {DAG_NAME}...")
+    session.sql(
+        f"ALTER TASK {PIPELINE_DB}.{PIPELINE_SCHEMA}.{DAG_NAME} RESUME"
+    ).collect()
+    print("  Root task resumed.")
+
+
 def deploy_dag(session: Session, execute: bool = False) -> None:
-    """Deploy the DAG to Snowflake."""
+    """Deploy the DAG to Snowflake.
+
+    When running as CICD_DEPLOY_RL (CI/CD), this uses a claim → deploy → release
+    pattern for task ownership:
+      1. Claim: temporarily take OWNERSHIP of existing tasks so CREATE OR REPLACE works.
+      2. Deploy: create/replace all tasks in the DAG.
+      3. Release: transfer OWNERSHIP back to SPCS_PSE_ROLE so tasks run with the
+         correct privileges at runtime.
+
+    When running locally as SPCS_PSE_ROLE, no ownership transfer is needed — the
+    deploying role is already the intended runtime owner.
+    """
     print(f"Building DAG: {DAG_NAME}")
 
     session.use_database(PIPELINE_DB)
@@ -313,6 +384,8 @@ def deploy_dag(session: Session, execute: bool = False) -> None:
 
     # Ensure environment is set up
     ensure_environment(session)
+
+    cicd_mode = _is_cicd_deploy(session)
 
     # Register MLJobDefinitions for compute-pool tasks (from Git stage)
     job_definitions = register_job_definitions(session)
@@ -329,6 +402,12 @@ def deploy_dag(session: Session, execute: bool = False) -> None:
     """).collect()
     print("Alerts table created/verified")
 
+    # --- Claim → Deploy → Release ---
+
+    # Pre-deploy: claim task ownership (CI/CD only)
+    if cicd_mode:
+        _claim_task_ownership(session)
+
     # Deploy the DAG
     root = Root(session)
     schema = root.databases[PIPELINE_DB].schemas[PIPELINE_SCHEMA]
@@ -338,13 +417,17 @@ def deploy_dag(session: Session, execute: bool = False) -> None:
     dag_op.deploy(dag, mode=CreateMode.or_replace)
     print(f"DAG '{DAG_NAME}' deployed successfully")
 
+    # Post-deploy: release task ownership back to runtime role (CI/CD only)
+    if cicd_mode:
+        _release_task_ownership(session)
+
     # List tasks in the DAG
     tasks = session.sql(f"""
         SHOW TASKS LIKE '%{DAG_NAME}%' IN SCHEMA {PIPELINE_DB}.{PIPELINE_SCHEMA}
     """).collect()
     print(f"\nTasks in DAG ({len(tasks)}):")
     for t in tasks:
-        print(f"  - {t['name']} (state: {t['state']})")
+        print(f"  - {t['name']} (state: {t['state']}, owner: {t['owner']})")
 
     if execute:
         print(f"\nExecuting DAG '{DAG_NAME}'...")
