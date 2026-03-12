@@ -9,6 +9,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.11'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   deploy:
@@ -33,6 +34,12 @@ jobs:
         run: |
           echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > /tmp/snowflake_key.p8
           chmod 600 /tmp/snowflake_key.p8
+
+      - name: Debug secrets
+        run: |
+          echo "SNOWFLAKE_ACCOUNT is set: ${{ secrets.SNOWFLAKE_ACCOUNT != '' }}"
+          echo "SNOWFLAKE_USER is set: ${{ secrets.SNOWFLAKE_USER != '' }}"
+          echo "SNOWFLAKE_PRIVATE_KEY is set: ${{ secrets.SNOWFLAKE_PRIVATE_KEY != '' }}"
 
       - name: Deploy DAG
         working-directory: task_graph_ml_stage/src
