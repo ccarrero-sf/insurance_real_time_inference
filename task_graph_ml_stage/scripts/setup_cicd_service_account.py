@@ -231,6 +231,12 @@ def setup_cicd_service_account(session: Session, rsa_public_key: str) -> None:
             f"GRANT ALL ON FUTURE TABLES IN SCHEMA {DB_NAME}.DATA TO ROLE {CICD_ROLE}",
             "Future grant on tables in DATA",
         ),
+
+        # -- Transfer ownership of existing tasks (needed for CREATE OR REPLACE) --
+        (
+            f"GRANT OWNERSHIP ON ALL TASKS IN SCHEMA {fqn_schema} TO ROLE {CICD_ROLE} COPY CURRENT GRANTS",
+            "Transfer ownership of existing tasks to CI/CD role",
+        ),
     ]
 
     print(f"Setting up CI/CD service account")
