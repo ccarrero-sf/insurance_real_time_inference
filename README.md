@@ -50,8 +50,9 @@ The project has three main paths: real-time inference, batch inference, and an a
 │                                               │
 │  CLEANUP (finalizer - always runs)            │
 │                                               │
-│  Schedule: daily 6am UTC                      │
-│  Two variants: task_graph / task_graph_stage  │
+│  Schedule: daily 9am UTC                      │
+│  CI/CD: GitHub Actions deploys on push        │
+│  Variants: task_graph / task_graph_ml_stage    │
 └───────────────────────────────────────────────┘
 ```
 
@@ -392,12 +393,18 @@ jupyter notebook car_insurance_batch_inference.ipynb
 
 ## Step 8: Automated Pipeline (Task Graph)
 
-The project includes two variants of an automated ML pipeline deployed as a Snowflake Task Graph (DAG). Both implement the same workflow but differ in how task code is loaded at runtime.
+The project includes three variants of an automated ML pipeline deployed as a Snowflake Task Graph (DAG). All implement the same workflow but differ in how task code is loaded and deployed.
 
 ### DAG Structure
 
 ```
+Variants A & B:
 INGEST_DATA >> TRAIN_MODEL >> CHECK_QUALITY >> [PROMOTE_MODEL, SEND_ALERT]
+PROMOTE_MODEL >> RUN_INFERENCE
+CLEANUP (finalizer - always runs)
+
+Variant C (task_graph_ml_stage):
+INGEST_DATA >> PREPARE_DATA >> TRAIN_MODEL >> CHECK_QUALITY >> [PROMOTE_MODEL, SEND_ALERT]
 PROMOTE_MODEL >> RUN_INFERENCE
 CLEANUP (finalizer - always runs)
 ```
@@ -405,6 +412,7 @@ CLEANUP (finalizer - always runs)
 | Task | Description |
 |------|-------------|
 | `INGEST_DATA` | Generate synthetic customer + policy data via ML Job on compute pool |
+| `PREPARE_DATA` | *(Variant C only)* Feature engineering and data preparation via stored procedure |
 | `TRAIN_MODEL` | Set up Feature Store, prepare datasets, train XGBoost model, register in Model Registry |
 | `CHECK_QUALITY` | Branch: compare new model R2 against threshold; route to promote or alert |
 | `PROMOTE_MODEL` | Set new model version as production default |
