@@ -501,18 +501,15 @@ All tasks communicate via `TaskContext.set_return_value()` / `get_predecessor_re
 
 All 7 tasks are defined as `StoredProcedureCall` objects. For the three compute-intensive tasks (`INGEST_DATA`, `TRAIN_MODEL`, `RUN_INFERENCE`), the stored procedure calls a wrapper function that submits an `@remote`-decorated function as an ML Job on the SPCS compute pool and blocks until completion via `.result()`. The `@remote` functions (in `data_ops.py` and `modeling.py`) are self-contained — they duplicate all imports, constants, and logic inside the function body so they serialize cleanly to the container runtime.
 
-Source code is uploaded to `@CODE_STAGE` and imported by each stored procedure at runtime via the `imports=STAGE_IMPORTS` parameter. To update task logic, the **DAG must be redeployed**.
-
 **Key characteristics:**
 - All tasks use `StoredProcedureCall` (runs on warehouse)
 - Heavy compute delegated to SPCS via `@remote(COMPUTE_POOL, stage_name=JOB_STAGE)`
 - Three `@remote` functions: `ingest_data_remote`, `train_model_remote`, `run_inference_remote`
-- Code loading: stage imports from `@CODE_STAGE`
 - Quality threshold: R2 >= 0.7
 - Schema: `CC_INSURANCE_PIPELINE.PIPELINE`
 - Schedule: Daily 6am UTC
 
-**How to deploy:**
+**How to deploy:**For tas
 
 ```bash
 cd task_graph
@@ -712,7 +709,7 @@ This creates:
 
 | Secret/Variable | Value |
 |-----------------|-------|
-| `SNOWFLAKE_ACCOUNT` | Your Snowflake account identifier (e.g., `phb14991`) |
+| `SNOWFLAKE_ACCOUNT` | Your Snowflake account identifier (e.g., `phx999991`) |
 | `SNOWFLAKE_USER` | `CICD_DEPLOY_USER` |
 | `SNOWFLAKE_PRIVATE_KEY` | Contents of `cicd_rsa_key.p8` |
 
