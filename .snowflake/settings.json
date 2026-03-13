@@ -1,0 +1,17 @@
+{
+  "notebookSettings": {
+    "idleAutoShutdownTimeSeconds": 900,
+    "externalAccessIntegrations": [],
+    "serviceDefaults": {
+      "runtime": "V2.3-CPU-PY3.11",
+      "runtimeImage": "",
+      "computePool": "SYSTEM_COMPUTE_POOL_CPU",
+      "idleTimeoutSec": 3600,
+      "externalAccessIntegrations": [
+        "ALLOW_ALL_EAI"
+      ],
+      "isGpuRuntime": false,
+      "pythonVersion": "3.11"
+    }
+  }
+}
