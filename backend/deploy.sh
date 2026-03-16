@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-SNOWFLAKE_CONNECTION="talent_keypair"
+SNOWFLAKE_CONNECTION="keypair"
 DATABASE="CC_ML_INSURANCE"
 SCHEMA="CAR_PRICING"
-IMAGE_REPO="sfseeurope-us-west-ccarrero-487.registry.snowflakecomputing.com/cc_ml_insurance/car_pricing/images"
+IMAGE_REPO="yourownaccount.registry.snowflakecomputing.com/cc_ml_insurance/car_pricing/images"
 IMAGE_NAME="insurance-backend"
 IMAGE_TAG="latest"
 SERVICE_NAME="INSURANCE_BACKEND_SVC"
