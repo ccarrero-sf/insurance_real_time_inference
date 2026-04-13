@@ -6,7 +6,7 @@ A complete end-to-end ML pipeline for predicting car insurance premiums using:
 - **Snowflake Model Registry** for model management
 - **SPCS (Snowpark Container Services)** for real-time inference
 
-## Architecture
+## Architecture --
 
 The project has three main paths: real-time inference, batch inference, and an automated pipeline.
 
